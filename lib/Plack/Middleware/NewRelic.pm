@@ -34,6 +34,11 @@ has agent => (
     builder => '_build_agent',
 );
 
+has transaction_attribute_headers => (
+    is      => 'ro',
+    builder => '_build_transaction_attribute_headers',
+);
+
 has path_rules => (
     is      => 'ro',
     default => sub { {} },
@@ -72,27 +77,38 @@ sub _build_agent {
     });
 }
 
+sub _build_transaction_attribute_headers {
+    return [ qw/Accept Accept-Language User-Agent/ ];
+}
+
+
 sub call {
     my ($self, $env) = @_;
 
-    $self->begin_transaction($env)
-        if $self->agent;
+    return $self->app->($env) unless $self->agent;
+
+    # XXX ought to use Scope::Guard or a try{} block around the app call
+    # otherwise an exception would prevent end_transaction being called
+    # Or document that this middleware should be 'outside' one that catches
+    # exceptions, such as Plack::Middleware::HTTPException, so it doesn't have
+    # to deal with them itself
+    $self->begin_transaction($env);
 
     my $res = $self->app->($env);
  
     if (ref($res) and 'ARRAY' eq ref($res)) {
-        $self->end_transaction($env);
+        $self->end_transaction($env, $res);
         return $res;
     }
  
-    Plack::Util::response_cb(
+    return Plack::Util::response_cb(
         $res,
         sub {
             my $res = shift;
             sub {
                 my $chunk = shift;
                 if (!defined $chunk) {
-                    $self->end_transaction($env);
+                    $self->end_transaction($env, $res);
                     return;
                 }
                 return $chunk;
@@ -114,30 +130,34 @@ sub transform_path {
 
 sub begin_transaction {
     my ($self, $env) = @_;
+    my $agent = $self->agent;
 
     # Begin the transaction
-    my $txn_id = $self->agent->begin_transaction;
+    my $txn_id = $agent->begin_transaction;
     return unless $txn_id >= 0;
 
     my $req = Plack::Request->new($env);
     $env->{TRANSACTION_ID} = $txn_id;
 
-    # Populate transaction data
-    $self->agent->set_transaction_request_url($txn_id, $req->request_uri);
+    # Populate initial transaction data
+
+    $agent->set_transaction_request_url($txn_id, $req->request_uri);
+
     my $method = $req->method;
     my $path   = $self->transform_path($req->path);
     my $name   = "$method $path";
-    $self->agent->set_transaction_name($txn_id, $name);
-    for my $key (qw/Accept Accept-Language User-Agent/) {
+    $agent->set_transaction_name($txn_id, $name);
+
+    for my $key (@{ $self->transaction_attribute_headers }) {
         my $value = $req->header($key);
-        $self->agent->add_transaction_attribute($txn_id, $key, $value)
+        $agent->add_transaction_attribute($txn_id, $key, $value)
             if $value;
     }
 }
 
 
 sub end_transaction {
-    my ($self, $env) = @_;
+    my ($self, $env, $res) = @_;
 
     if (my $txn_id = $env->{TRANSACTION_ID}) {
         $self->agent->end_transaction($txn_id);
