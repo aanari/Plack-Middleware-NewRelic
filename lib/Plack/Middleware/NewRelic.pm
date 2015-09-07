@@ -87,7 +87,7 @@ sub call {
     my $res = $self->app->($env);
  
     if (ref($res) and 'ARRAY' eq ref($res)) {
-        $self->end_transaction($env);
+        $self->end_transaction($env, $res);
         return $res;
     }
  
@@ -98,7 +98,7 @@ sub call {
             sub {
                 my $chunk = shift;
                 if (!defined $chunk) {
-                    $self->end_transaction($env);
+                    $self->end_transaction($env, $res);
                     return;
                 }
                 return $chunk;
@@ -146,7 +146,7 @@ sub begin_transaction {
 
 
 sub end_transaction {
-    my ($self, $env) = @_;
+    my ($self, $env, $res) = @_;
 
     if (my $txn_id = $env->{TRANSACTION_ID}) {
         $self->agent->end_transaction($txn_id);
