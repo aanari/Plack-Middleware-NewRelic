@@ -34,6 +34,11 @@ has agent => (
     builder => '_build_agent',
 );
 
+has transaction_attribute_headers => (
+    is      => 'ro',
+    builder => '_build_transaction_attribute_headers',
+);
+
 has path_rules => (
     is      => 'ro',
     default => sub { {} },
@@ -71,6 +76,11 @@ sub _build_agent {
         return $agent;
     });
 }
+
+sub _build_transaction_attribute_headers {
+    return [ qw/Accept Accept-Language User-Agent/ ];
+}
+
 
 sub call {
     my ($self, $env) = @_;
@@ -120,9 +130,10 @@ sub transform_path {
 
 sub begin_transaction {
     my ($self, $env) = @_;
+    my $agent = $self->agent;
 
     # Begin the transaction
-    my $txn_id = $self->agent->begin_transaction;
+    my $txn_id = $agent->begin_transaction;
     return unless $txn_id >= 0;
 
     my $req = Plack::Request->new($env);
@@ -130,16 +141,16 @@ sub begin_transaction {
 
     # Populate initial transaction data
 
-    $self->agent->set_transaction_request_url($txn_id, $req->request_uri);
+    $agent->set_transaction_request_url($txn_id, $req->request_uri);
 
     my $method = $req->method;
     my $path   = $self->transform_path($req->path);
     my $name   = "$method $path";
-    $self->agent->set_transaction_name($txn_id, $name);
+    $agent->set_transaction_name($txn_id, $name);
 
-    for my $key (qw/Accept Accept-Language User-Agent/) {
+    for my $key (@{ $self->transaction_attribute_headers }) {
         my $value = $req->header($key);
-        $self->agent->add_transaction_attribute($txn_id, $key, $value)
+        $agent->add_transaction_attribute($txn_id, $key, $value)
             if $value;
     }
 }
