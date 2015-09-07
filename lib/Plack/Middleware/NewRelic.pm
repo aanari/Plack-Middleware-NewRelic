@@ -75,8 +75,14 @@ sub _build_agent {
 sub call {
     my ($self, $env) = @_;
 
-    $self->begin_transaction($env)
-        if $self->agent;
+    return $self->app->($env) unless $self->agent;
+
+    # XXX ought to use Scope::Guard or a try{} block around the app call
+    # otherwise an exception would prevent end_transaction being called
+    # Or document that this middleware should be 'outside' one that catches
+    # exceptions, such as Plack::Middleware::HTTPException, so it doesn't have
+    # to deal with them itself
+    $self->begin_transaction($env);
 
     my $res = $self->app->($env);
  
@@ -85,7 +91,7 @@ sub call {
         return $res;
     }
  
-    Plack::Util::response_cb(
+    return Plack::Util::response_cb(
         $res,
         sub {
             my $res = shift;
@@ -122,12 +128,15 @@ sub begin_transaction {
     my $req = Plack::Request->new($env);
     $env->{TRANSACTION_ID} = $txn_id;
 
-    # Populate transaction data
+    # Populate initial transaction data
+
     $self->agent->set_transaction_request_url($txn_id, $req->request_uri);
+
     my $method = $req->method;
     my $path   = $self->transform_path($req->path);
     my $name   = "$method $path";
     $self->agent->set_transaction_name($txn_id, $name);
+
     for my $key (qw/Accept Accept-Language User-Agent/) {
         my $value = $req->header($key);
         $self->agent->add_transaction_attribute($txn_id, $key, $value)
